@@ -84,6 +84,20 @@ tail -f /opt/homebrew/var/log/jenkins-lts/jenkins-lts.log
 cd ~/.jenkins
 ```
 
+## 🔧 Quick Fix:
+The report page is blank because of Content Security Policy (CSP) restrictions in Jenkins.
+**Option 1:** Relax Jenkins CSP (Easiest)
+
+1. **Go to:** Manage Jenkins → Script Console
+
+2. **Paste this:**
+```bash
+System.setProperty("hudson.model.DirectoryBrowserSupport.CSP", "")
+```
+
+3. Click Run
+4. Refresh your report page
+
 ## 👥 For Manual Testers
 
 1. Open Terminal
