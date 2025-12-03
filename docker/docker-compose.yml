@@ -1,0 +1,13 @@
+version: '3.8'
+
+services:
+  playwright-tests:
+    build:
+      context: ..
+      dockerfile: docker/Dockerfile
+    volumes:
+      - ../playwright-report:/app/playwright-report
+      - ../test-results:/app/test-results
+    environment:
+      - BASE_URL=${BASE_URL:-https://demo.playwright.dev/todomvc}
+      - HEADLESS=true

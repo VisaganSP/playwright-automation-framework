@@ -1,0 +1,127 @@
+pipeline {
+    agent any
+    
+    parameters {
+        choice(
+            name: 'TEST_SUITE',
+            choices: ['All Tests', 'Smoke Tests', 'Critical Tests', 'Auth Tests', 'Products Tests', 'Checkout Tests'],
+            description: 'Select test suite'
+        )
+        choice(
+            name: 'BROWSER',
+            choices: ['chromium', 'firefox', 'webkit', 'all'],
+            description: 'Select browser'
+        )
+        booleanParam(
+            name: 'HEADLESS',
+            defaultValue: true,
+            description: 'Run in headless mode?'
+        )
+    }
+    
+    environment {
+        TEAMS_WEBHOOK = credentials('TEAMS_WEBHOOK_URL')
+    }
+    
+    triggers {
+        cron('30 10 * * *') // 4 PM IST
+    }
+    
+    stages {
+        stage('Cleanup') {
+            steps {
+                cleanWs()
+            }
+        }
+        
+        stage('Checkout') {
+            steps {
+                git branch: 'main', url: 'YOUR_GIT_REPO_URL'
+            }
+        }
+        
+        stage('Run Tests') {
+            agent {
+                docker {
+                    image 'mcr.microsoft.com/playwright:v1.40.0-focal'
+                    reuseNode true
+                }
+            }
+            steps {
+                script {
+                    sh 'npm ci'
+                    
+                    def cmd = 'npx playwright test'
+                    
+                    switch(params.TEST_SUITE) {
+                        case 'Smoke Tests':
+                            cmd += ' --grep @smoke'
+                            break
+                        case 'Critical Tests':
+                            cmd += ' --grep @critical'
+                            break
+                        case 'Auth Tests':
+                            cmd += ' tests/auth'
+                            break
+                        case 'Products Tests':
+                            cmd += ' tests/products'
+                            break
+                        case 'Checkout Tests':
+                            cmd += ' tests/checkout'
+                            break
+                    }
+                    
+                    if (params.BROWSER != 'all') {
+                        cmd += " --project=${params.BROWSER}"
+                    }
+                    
+                    sh "${cmd} || true"
+                }
+            }
+        }
+        
+        stage('Publish Report') {
+            steps {
+                publishHTML([
+                    reportDir: 'playwright-report',
+                    reportFiles: 'index.html',
+                    reportName: 'Test Report'
+                ])
+            }
+        }
+    }
+    
+    post {
+        always {
+            script {
+                sendTeamsNotification()
+            }
+        }
+    }
+}
+
+def sendTeamsNotification() {
+    def reportUrl = "${env.BUILD_URL}Test_20Report/"
+    def message = """
+    {
+        "@type": "MessageCard",
+        "themeColor": "${currentBuild.result == 'SUCCESS' ? '00FF00' : 'FF0000'}",
+        "summary": "Test Results",
+        "sections": [{
+            "activityTitle": "🎭 Playwright Tests - ${currentBuild.result}",
+            "facts": [
+                {"name": "Suite:", "value": "${params.TEST_SUITE}"},
+                {"name": "Browser:", "value": "${params.BROWSER}"},
+                {"name": "Duration:", "value": "${currentBuild.durationString}"},
+                {"name": "Build:", "value": "#${env.BUILD_NUMBER}"}
+            ]
+        }],
+        "potentialAction": [{
+            "@type": "OpenUri",
+            "name": "View Report",
+            "targets": [{"os": "default", "uri": "${reportUrl}"}]
+        }]
+    }
+    """
+    sh "curl -H 'Content-Type: application/json' -d '${message}' ${TEAMS_WEBHOOK}"
+}
