@@ -1,127 +1,127 @@
 pipeline {
     agent any
     
-    parameters {
-        choice(
-            name: 'TEST_SUITE',
-            choices: ['All Tests', 'Smoke Tests', 'Critical Tests', 'Auth Tests', 'Products Tests', 'Checkout Tests'],
-            description: 'Select test suite'
-        )
-        choice(
-            name: 'BROWSER',
-            choices: ['chromium', 'firefox', 'webkit', 'all'],
-            description: 'Select browser'
-        )
-        booleanParam(
-            name: 'HEADLESS',
-            defaultValue: true,
-            description: 'Run in headless mode?'
-        )
+    // Add NodeJS tool
+    tools {
+        nodejs 'Node25'  // Must match the name from Jenkins configuration
     }
     
     environment {
-        TEAMS_WEBHOOK = credentials('TEAMS_WEBHOOK_URL')
-    }
-    
-    triggers {
-        cron('30 10 * * *') // 4 PM IST
+        BASE_URL = 'http://localhost:5173'
     }
     
     stages {
-        stage('Cleanup') {
+        stage('Cleanup Workspace') {
             steps {
-                cleanWs()
+                script {
+                    echo '🧹 Cleaning workspace...'
+                    cleanWs()
+                }
             }
         }
         
-        stage('Checkout') {
+        stage('Checkout Code') {
             steps {
-                git branch: 'main', url: 'YOUR_GIT_REPO_URL'
+                script {
+                    echo '📦 Checking out code from Git...'
+                    git branch: 'main', url: 'https://github.com/VisaganSP/playwright-automation-framework.git'
+                }
+            }
+        }
+        
+        stage('Verify Environment') {
+            steps {
+                script {
+                    echo '🔍 Verifying environment...'
+                    sh '''
+                        echo "Node version:"
+                        node --version
+                        echo "NPM version:"
+                        npm --version
+                        echo "PATH: $PATH"
+                    '''
+                }
+            }
+        }
+        
+        stage('Install Dependencies') {
+            steps {
+                script {
+                    echo '📥 Installing dependencies...'
+                    sh 'npm ci'
+                    
+                    echo '🌐 Installing Playwright browsers...'
+                    sh 'npx playwright install --with-deps'
+                }
             }
         }
         
         stage('Run Tests') {
-            agent {
-                docker {
-                    image 'mcr.microsoft.com/playwright:v1.40.0-focal'
-                    reuseNode true
-                }
-            }
             steps {
                 script {
-                    sh 'npm ci'
+                    echo '🎭 Running Playwright tests...'
                     
-                    def cmd = 'npx playwright test'
+                    def testCommand = 'npx playwright test'
                     
                     switch(params.TEST_SUITE) {
                         case 'Smoke Tests':
-                            cmd += ' --grep @smoke'
+                            testCommand += ' --grep @smoke'
                             break
                         case 'Critical Tests':
-                            cmd += ' --grep @critical'
+                            testCommand += ' --grep @critical'
                             break
                         case 'Auth Tests':
-                            cmd += ' tests/auth'
+                            testCommand += ' tests/auth'
                             break
                         case 'Products Tests':
-                            cmd += ' tests/products'
+                            testCommand += ' tests/products'
                             break
                         case 'Checkout Tests':
-                            cmd += ' tests/checkout'
+                            testCommand += ' tests/checkout'
                             break
                     }
                     
                     if (params.BROWSER != 'all') {
-                        cmd += " --project=${params.BROWSER}"
+                        testCommand += " --project=${params.BROWSER}"
                     }
                     
-                    sh "${cmd} || true"
+                    // Run tests (continue even if tests fail)
+                    sh """
+                        export HEADLESS=${params.HEADLESS}
+                        export BASE_URL=http://localhost:5173
+                        ${testCommand} || true
+                    """
                 }
             }
         }
         
-        stage('Publish Report') {
+        stage('Publish HTML Report') {
             steps {
-                publishHTML([
-                    reportDir: 'playwright-report',
-                    reportFiles: 'index.html',
-                    reportName: 'Test Report'
-                ])
+                script {
+                    echo '📊 Publishing HTML report...'
+                    publishHTML([
+                        allowMissing: false,
+                        alwaysLinkToLastBuild: true,
+                        keepAll: true,
+                        reportDir: 'playwright-report',
+                        reportFiles: 'index.html',
+                        reportName: 'Playwright Test Report',
+                        reportTitles: 'Test Results'
+                    ])
+                }
             }
         }
     }
     
     post {
+        success {
+            echo '✅ Build completed successfully!'
+        }
+        failure {
+            echo '❌ Build failed!'
+        }
         always {
-            script {
-                sendTeamsNotification()
-            }
+            echo '📋 Test execution completed'
         }
     }
-}
-
-def sendTeamsNotification() {
-    def reportUrl = "${env.BUILD_URL}Test_20Report/"
-    def message = """
-    {
-        "@type": "MessageCard",
-        "themeColor": "${currentBuild.result == 'SUCCESS' ? '00FF00' : 'FF0000'}",
-        "summary": "Test Results",
-        "sections": [{
-            "activityTitle": "🎭 Playwright Tests - ${currentBuild.result}",
-            "facts": [
-                {"name": "Suite:", "value": "${params.TEST_SUITE}"},
-                {"name": "Browser:", "value": "${params.BROWSER}"},
-                {"name": "Duration:", "value": "${currentBuild.durationString}"},
-                {"name": "Build:", "value": "#${env.BUILD_NUMBER}"}
-            ]
-        }],
-        "potentialAction": [{
-            "@type": "OpenUri",
-            "name": "View Report",
-            "targets": [{"os": "default", "uri": "${reportUrl}"}]
-        }]
-    }
-    """
-    sh "curl -H 'Content-Type: application/json' -d '${message}' ${TEAMS_WEBHOOK}"
 }
